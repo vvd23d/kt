@@ -1,0 +1,84 @@
+version: '3.3'
+services:
+  db:
+    image: postgres:12.0-alpine
+    restart: always
+    hostname: db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data/
+    environment:
+      - POSTGRES_USER=ktteam
+      - POSTGRES_PASSWORD=ktteam
+      - POSTGRES_DB=ktteam
+    expose:
+      - 5432
+
+  rabbit:
+    image: rabbitmq:3.6.9-alpine
+    restart: on-failure
+    environment:
+      - RABBITMQ_DEFAULT_USER=kt
+      - RABBITMQ_DEFAULT_PASS=kt
+      - RABBITMQ_DEFAULT_VHOST=kt
+    expose:
+      - 5672
+    volumes:
+      # - /usr/share/zoneinfo/Europe/Moscow:/etc/localtime:ro
+      - rabbit_data:/var/lib/rabbitmq/mnesia/rabbit@rabbit
+
+  web:
+    build: .
+    restart: always
+    command: sh -c "python manage.py makemigrations &&
+                    python manage.py migrate &&
+                    python manage.py collectstatic --noinput &&
+                    python manage.py shell < adminuser.py &&
+                    gunicorn kt.wsgi:application --bind 0.0.0.0:8014"
+
+    # command: sh -c "python manage.py migrate &&
+    #                 python manage.py shell < adminuser.py &&
+    #                 gunicorn kt.wsgi:application --bind 0.0.0.0:8014"
+
+    env_file:
+      - .env
+    volumes:
+      - static_volume:/usr/src/app/staticfiles
+    expose:
+      - 8014
+    depends_on:
+      - db
+      - rabbit
+
+  worker:
+    build: .
+    env_file:
+      - .env
+    command: sh -c "celery multi start -A kt w1 -l info &&
+                    while true; do sleep 2; done"
+    depends_on:
+      - web
+      - rabbit
+
+  beat:
+    build: .
+    command: sh -c "celery -A kt beat"
+    env_file:
+      - .env
+    depends_on:
+      - web
+      - rabbit
+
+  nginx:
+    build: ./nginx
+    restart: always
+    volumes:
+      - static_volume:/usr/src/app/staticfiles
+    ports:
+      - 8015:8015
+    depends_on:
+      - web
+
+volumes:
+  postgres_data:
+  rabbit_data:
+  static_volume:
